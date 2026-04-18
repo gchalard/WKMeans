@@ -1,11 +1,25 @@
-from typing import Optional
+from typing import Any, Callable, Optional, Union
 from dataclasses import dataclass, field
 from datetime import datetime
 from hashlib import sha256
+import pickle
 import numpy as np
 import ot
+import cloudpickle
 from pathlib import Path
 import yaml
+
+
+# A scaler is either a callable (e.g. lambda / function) or any object exposing
+# a sklearn-style ``transform(X)`` method (e.g. ``StandardScaler``).
+Scaler = Union[Callable[[np.ndarray], np.ndarray], Any]
+
+
+def _apply_scaler(scaler: Scaler, samples: np.ndarray) -> np.ndarray:
+    """Apply a scaler regardless of whether it is callable or sklearn-style."""
+    if hasattr(scaler, "transform"):
+        return scaler.transform(samples)
+    return scaler(samples)
 
 
 @dataclass
@@ -17,6 +31,7 @@ class WKMeans:
     seed: int = 42 # random seed
     centroids: list[np.ndarray] = field(default_factory=list) # list of centroids
     features: list[str] = field(default_factory=list) # list of features
+    scaler: Optional[Scaler] = None
 
 
     def wasserstein_distance(self, mu1, mu2):
@@ -84,6 +99,8 @@ class WKMeans:
         Returns:
         - List of cluster indices
         """
+        if self.scaler is not None:
+            samples = _apply_scaler(self.scaler, samples)
         return [np.argmin([self.wasserstein_distance(sample, centroid) for centroid in self.centroids]) for sample in samples]
 
     def _export_centroids(self, path_prefix: Path) -> tuple[Path, str]:
@@ -103,7 +120,24 @@ class WKMeans:
         return path, hash_
 
 
-    def _export_metadata(self, centroids_path: Path, hash_: str, path_prefix: Path) -> None:
+    def _export_scaler(self, hash_: str, path_prefix: Path) -> Optional[Path]:
+        """Serialize the scaler with cloudpickle so that lambdas, closures and
+        sklearn-style scalers are all supported. Returns the file path, or
+        ``None`` if no scaler is configured."""
+        if self.scaler is None:
+            return None
+
+        path = path_prefix / f"scaler:{hash_}.pkl"
+
+        if not path.parent.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(path, "wb") as f:
+            cloudpickle.dump(self.scaler, f)
+
+        return path
+
+    def _export_metadata(self, centroids_path: Path, hash_: str, path_prefix: Path, scaler_path: Optional[Path] = None) -> None:
         createdAt = datetime.now().isoformat()
 
         metadata = {
@@ -115,7 +149,8 @@ class WKMeans:
                     not attr.startswith("_") and 
                     not callable(getattr(self, attr)) and 
                     not attr == "centroids" and 
-                    not attr == "features"
+                    not attr == "features" and
+                    not attr == "scaler"
                 )
             }
         }
@@ -130,6 +165,7 @@ class WKMeans:
 
         metadata["features"] = features_prefix
         metadata["centroids"] = centroids_path.name
+        metadata["scaler"] = scaler_path.name if scaler_path is not None else None
 
         with open(path_prefix / f"metadata:{hash_}.yaml", "w") as f:
             yaml.dump(metadata, f)
@@ -138,7 +174,13 @@ class WKMeans:
 
     def export(self, path_prefix: Path) -> None:
         centroids_path, hash_ = self._export_centroids(path_prefix=path_prefix)
-        self._export_metadata(centroids_path=centroids_path, hash_=hash_, path_prefix=path_prefix)
+        scaler_path = self._export_scaler(hash_=hash_, path_prefix=path_prefix)
+        self._export_metadata(
+            centroids_path=centroids_path,
+            hash_=hash_,
+            path_prefix=path_prefix,
+            scaler_path=scaler_path,
+        )
 
     @classmethod
     def from_file(cls, path_prefix: Optional[Path] = None, hash_: Optional[str] = None, metadata_path: Optional[Path] = None, centroids_path: Optional[Path] = None) -> "WKMeans":
@@ -178,6 +220,14 @@ class WKMeans:
         # predict iterates centroids; must be k separate 1D arrays, not a flat buffer
         centroids = [M[i].copy() for i in range(k)]
 
+        scaler = None
+        scaler_filename = metadata.get("scaler")
+        if scaler_filename:
+            scaler_path = metadata_path.parent / scaler_filename
+            with open(scaler_path, "rb") as f:
+                # cloudpickle output is loadable by stdlib pickle
+                scaler = pickle.load(f)
+
         return cls(
             k=k,
             p=metadata["p"],
@@ -185,5 +235,6 @@ class WKMeans:
             max_iter=metadata["max_iter"],
             seed=metadata["seed"],
             centroids=centroids,
-            features=metadata["features"]
+            features=metadata["features"],
+            scaler=scaler,
         )
