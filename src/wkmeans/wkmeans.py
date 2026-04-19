@@ -196,7 +196,7 @@ class WKMeans:
 
         return path
 
-    def _export_metadata(self, centroids_path: Path, hash_: str, path_prefix: Path, scaler_path: Optional[Path] = None) -> None:
+    def _export_metadata(self, centroids_path: Path, hash_: str, path_prefix: Path, scaler_path: Optional[Path] = None) -> Path:
         createdAt = datetime.now().isoformat()
 
         metadata = {
@@ -231,11 +231,9 @@ class WKMeans:
         with open(metadata_path, "w") as f:
             yaml.dump(metadata, f)
 
-        return metadata_path, centroids_path, scaler_path
-        
+        return metadata_path
 
-
-    def export(self, path_prefix: Path) -> None:
+    def export(self, path_prefix: Path) -> tuple[Path, Path, Optional[Path]]:
         centroids_path, hash_ = self._export_centroids(path_prefix=path_prefix)
         scaler_path = self._export_scaler(hash_=hash_, path_prefix=path_prefix)
         metadata_path = self._export_metadata(
