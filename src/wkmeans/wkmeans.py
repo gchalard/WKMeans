@@ -226,20 +226,26 @@ class WKMeans:
         metadata["centroids"] = centroids_path.name
         metadata["scaler"] = scaler_path.name if scaler_path is not None else None
 
-        with open(path_prefix / f"metadata:{hash_}.yaml", "w") as f:
+        metadata_path = path_prefix / f"metadata:{hash_}.yaml"
+
+        with open(metadata_path, "w") as f:
             yaml.dump(metadata, f)
+
+        return metadata_path, centroids_path, scaler_path
         
 
 
     def export(self, path_prefix: Path) -> None:
         centroids_path, hash_ = self._export_centroids(path_prefix=path_prefix)
         scaler_path = self._export_scaler(hash_=hash_, path_prefix=path_prefix)
-        self._export_metadata(
+        metadata_path = self._export_metadata(
             centroids_path=centroids_path,
             hash_=hash_,
             path_prefix=path_prefix,
             scaler_path=scaler_path,
         )
+
+        return metadata_path, centroids_path, scaler_path
 
     @classmethod
     def from_file(cls, path_prefix: Optional[Path] = None, hash_: Optional[str] = None, metadata_path: Optional[Path] = None, centroids_path: Optional[Path] = None) -> "WKMeans":
